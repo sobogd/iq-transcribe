@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Palette driven by CSS vars so we can override them from Telegram themeParams
+   at runtime. Defaults below cover plain browser (light + dark). */
+:root {
+  --bg: #eceef1; /* page background — greyish */
+  --accent: #ffffff; /* header / footer — white */
+  --card: #ffffff; /* message cards — white */
+  --text: #18181b;
+  --hint: #71717a;
+  --border: #e3e4e8;
+  --button: #059669;
+  --button-text: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0a0a0a;
+    --accent: #1b1b1e;
+    --card: #1b1b1e;
+    --text: #fafafa;
+    --hint: #a1a1aa;
+    --border: #2a2a2e;
+    --button: #10b981;
+    --button-text: #ffffff;
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
