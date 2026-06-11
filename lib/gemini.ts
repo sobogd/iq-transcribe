@@ -60,7 +60,11 @@ export async function transcribeAudio(audioBuf: Buffer): Promise<GeminiResult> {
   const audioMime = "audio/mpeg";
   const gFile = await uploadToGemini(audioBuf, audioMime, `audio-${Date.now()}.mp3`);
   try {
-    const response = await ai.models.generateContent({
+    // Stream the response: long transcripts can take several minutes to fully
+    // generate, which would trip undici's 300s headers timeout on a single
+    // non-streamed fetch. Streaming gets headers immediately and keeps the
+    // connection alive as tokens arrive.
+    const stream = await ai.models.generateContentStream({
       model: MODEL,
       contents: [
         {
@@ -73,7 +77,9 @@ export async function transcribeAudio(audioBuf: Buffer): Promise<GeminiResult> {
       ],
       config: genConfig,
     });
-    return JSON.parse(response.text ?? "{}");
+    let text = "";
+    for await (const chunk of stream) text += chunk.text ?? "";
+    return JSON.parse(text || "{}");
   } finally {
     try {
       await ai.files.delete({ name: gFile.name as string });

@@ -4,7 +4,7 @@ import { resolveOwner, isAllowed } from "@/lib/auth";
 import { transcribeAudio } from "@/lib/gemini";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 // Transcribe + summarize the already-extracted audio (step 2 of the flow).
 // Works from "ready" or "error" status; on failure keeps the row with the error
