@@ -2,10 +2,11 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import ffmpegPath from "ffmpeg-static";
+import ffmpegStatic from "ffmpeg-static";
 import { prisma } from "@/lib/prisma";
 import { getS3Client, s3Bucket, s3Key, getPublicUrl } from "@/lib/s3";
 import { resolveOwner, isAllowed } from "@/lib/auth";
@@ -54,15 +55,28 @@ type GeminiResult = {
 // billed on audio seconds (32 tok/s) regardless of bitrate, so sending only the
 // audio — not the video frames — roughly halves the per-hour cost. ffmpeg-static
 // ships the binary via npm (correct arch installed by `npm ci` on the server).
+// Resolve the ffmpeg binary at runtime. ffmpeg-static bakes an absolute path via
+// __dirname which the bundler can rewrite to a build-time path, so fall back to
+// the binary inside the running app's node_modules (pm2 cwd).
+function resolveFfmpeg(): string {
+  const candidates = [
+    process.env.FFMPEG_PATH,
+    ffmpegStatic,
+    join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg"),
+  ].filter((p): p is string => Boolean(p));
+  for (const c of candidates) if (existsSync(c)) return c;
+  throw new Error("ffmpeg binary not found");
+}
+
 async function extractAudio(buf: Buffer, ext: string): Promise<Buffer> {
-  if (!ffmpegPath) throw new Error("ffmpeg binary not found");
+  const ffmpegPath = resolveFfmpeg();
   const dir = await mkdtemp(join(tmpdir(), "transcribe-"));
   const inPath = join(dir, `in.${ext || "mp4"}`);
   const outPath = join(dir, "out.mp3");
   await writeFile(inPath, buf);
   try {
     await new Promise<void>((resolve, reject) => {
-      const ff = spawn(ffmpegPath as string, [
+      const ff = spawn(ffmpegPath, [
         "-i", inPath,
         "-vn", // drop video
         "-ac", "1", // mono
