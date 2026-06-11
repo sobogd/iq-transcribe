@@ -2,11 +2,13 @@
 
 import { useRef, useState } from "react";
 import { X, Loader2, UploadCloud, FileVideo } from "lucide-react";
-import { apiFetch } from "@/lib/client";
+import { authHeaders } from "@/lib/client";
 import { fmtSize } from "@/lib/types";
 
 // Accepted media: start with mp4, but allow common audio/video the model handles.
 const ACCEPT = "video/mp4,video/quicktime,audio/mpeg,audio/wav,audio/mp4,audio/x-m4a";
+
+type Phase = "idle" | "uploading" | "processing";
 
 export function UploadModal({
   onClose,
@@ -16,25 +18,57 @@ export function UploadModal({
   onDone: (id: string) => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [progress, setProgress] = useState(0); // upload %, 0–100
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function upload() {
+  const busy = phase !== "idle";
+
+  // fetch() can't report upload progress, so use XHR for the big media POST.
+  function upload() {
     if (!file || busy) return;
-    setBusy(true);
     setError(null);
-    try {
-      const fd = new FormData();
-      fd.append("file", file, file.name);
-      const res = await apiFetch("/api/transcribe", { method: "POST", body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Ошибка сервера");
-      onDone(data.id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка");
-      setBusy(false);
-    }
+    setProgress(0);
+    setPhase("uploading");
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/transcribe");
+    for (const [k, v] of Object.entries(authHeaders())) xhr.setRequestHeader(k, v);
+    // Send the raw file (not multipart) so the server streams it straight to
+    // disk without buffering the whole video in RAM. Name travels in a header.
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.round((e.loaded / e.total) * 100);
+      setProgress(pct);
+      // once bytes are all sent, the server is extracting + storing the audio
+      if (pct >= 100) setPhase("processing");
+    };
+
+    xhr.onload = () => {
+      let data: { id?: string; error?: string } = {};
+      try {
+        data = JSON.parse(xhr.responseText);
+      } catch {
+        data = { error: `Ошибка сервера (${xhr.status})` };
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data.id) {
+        onDone(data.id);
+      } else {
+        setError(data.error || `Ошибка сервера (${xhr.status})`);
+        setPhase("idle");
+      }
+    };
+
+    xhr.onerror = () => {
+      setError("Сбой сети при загрузке");
+      setPhase("idle");
+    };
+
+    xhr.send(file);
   }
 
   return (
@@ -91,7 +125,7 @@ export function UploadModal({
               <UploadCloud size={26} className="text-emerald-500" />
               <span className="text-sm font-medium">Выбрать видео (MP4)</span>
               <span className="text-xs" style={{ color: "var(--hint)" }}>
-                Файл расшифруется в текст + краткое саммери
+                Извлечём аудио, потом транскрибируешь в текст + саммери
               </span>
             </>
           )}
@@ -103,17 +137,41 @@ export function UploadModal({
           </div>
         )}
 
+        {phase === "uploading" && (
+          <div className="flex flex-col gap-1.5">
+            <div className="flex justify-between text-xs" style={{ color: "var(--hint)" }}>
+              <span>Загрузка…</span>
+              <span>{progress}%</span>
+            </div>
+            <div
+              className="h-2 w-full overflow-hidden rounded-full"
+              style={{ background: "var(--border)" }}
+            >
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-[width] duration-150"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
         <button
           onClick={upload}
           disabled={!file || busy}
           className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-6 py-3 text-sm font-medium text-white shadow transition hover:bg-emerald-500 active:scale-[0.98] disabled:opacity-50"
         >
           {busy && <Loader2 size={16} className="animate-spin" />}
-          {busy ? "Расшифровываю…" : "Расшифровать"}
+          {phase === "uploading"
+            ? `Загрузка ${progress}%`
+            : phase === "processing"
+              ? "Извлекаю аудио…"
+              : "Загрузить"}
         </button>
         {busy && (
           <p className="text-center text-xs" style={{ color: "var(--hint)" }}>
-            Обработка видео занимает до пары минут — не закрывайте окно.
+            {phase === "uploading"
+              ? "Идёт загрузка файла — не закрывайте окно."
+              : "Извлекаю аудиодорожку — не закрывайте окно."}
           </p>
         )}
       </div>

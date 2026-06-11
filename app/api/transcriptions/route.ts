@@ -20,6 +20,7 @@ export async function GET(req: NextRequest) {
         fileName: true,
         language: true,
         summary: true,
+        status: true,
         createdAt: true,
       },
     });

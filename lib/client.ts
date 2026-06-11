@@ -52,7 +52,7 @@ function deviceId(): string {
   return id;
 }
 
-function authHeaders(): Record<string, string> {
+export function authHeaders(): Record<string, string> {
   const initData = tg()?.initData;
   if (initData) return { "X-Telegram-Init-Data": initData };
   return { "X-Device-Id": deviceId() };

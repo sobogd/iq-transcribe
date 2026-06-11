@@ -1,19 +1,23 @@
+export type TranscriptionStatus = "ready" | "processing" | "done" | "error";
+
 export type TranscriptionRow = {
   id: string;
   title: string;
   fileName: string;
-  fileUrl: string | null;
+  audioUrl: string | null;
   mimeType: string;
   sizeBytes: number | null;
   language: string;
   transcript: string;
   summary: string;
+  status: TranscriptionStatus;
+  error: string | null;
   createdAt: string;
 };
 
 export type TranscriptionListItem = Pick<
   TranscriptionRow,
-  "id" | "title" | "fileName" | "language" | "summary" | "createdAt"
+  "id" | "title" | "fileName" | "language" | "summary" | "status" | "createdAt"
 >;
 
 export const langLabel = (l?: string) => {

@@ -1,18 +1,40 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { Plus, FileText, Loader2, Lock } from "lucide-react";
+import { Plus, FileText, Loader2, Lock, Headphones, AlertTriangle } from "lucide-react";
 import { UploadModal } from "@/components/UploadModal";
+import { TranscriptionSheet } from "@/components/TranscriptionSheet";
 import { apiFetch, initTelegram, telegramUserId } from "@/lib/client";
 import { langLabel, type TranscriptionListItem } from "@/lib/types";
 
+function StatusBadge({ status }: { status: TranscriptionListItem["status"] }) {
+  if (status === "ready")
+    return (
+      <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+        <Headphones size={13} /> Аудио готово — транскрибировать
+      </span>
+    );
+  if (status === "processing")
+    return (
+      <span className="inline-flex items-center gap-1" style={{ color: "var(--hint)" }}>
+        <Loader2 size={13} className="animate-spin" /> Транскрибирую…
+      </span>
+    );
+  if (status === "error")
+    return (
+      <span className="inline-flex items-center gap-1 text-red-500">
+        <AlertTriangle size={13} /> Ошибка
+      </span>
+    );
+  return null;
+}
+
 export default function Home() {
-  const router = useRouter();
   const [rows, setRows] = useState<TranscriptionListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -36,8 +58,11 @@ export default function Home() {
     load();
   }, [load]);
 
-  function onDone(id: string) {
-    router.push(`/c/${id}`);
+  // After upload the row is "ready" — open it so the user can transcribe.
+  function onUploaded(id: string) {
+    setShowUpload(false);
+    load();
+    setSelectedId(id);
   }
 
   if (forbidden) {
@@ -94,8 +119,8 @@ export default function Home() {
           >
             <FileText size={26} />
             <p className="text-sm">
-              Пока пусто. Загрузите видео (MP4) — получите расшифровку речи и
-              краткое саммери.
+              Пока пусто. Загрузите видео (MP4) — из него извлечётся аудио, потом
+              можно транскрибировать в текст и саммери.
             </p>
           </div>
         ) : (
@@ -103,7 +128,7 @@ export default function Home() {
             {rows.map((r) => (
               <div
                 key={r.id}
-                onClick={() => router.push(`/c/${r.id}`)}
+                onClick={() => setSelectedId(r.id)}
                 className="flex cursor-pointer items-start gap-3 rounded-2xl border p-4 shadow-sm transition active:scale-[0.99]"
                 style={{ background: "var(--card)", borderColor: "var(--border)" }}
               >
@@ -112,7 +137,7 @@ export default function Home() {
                     <FileText size={15} className="shrink-0 text-emerald-500" />
                     <span className="truncate font-medium">{r.title || r.fileName}</span>
                   </div>
-                  {r.summary && (
+                  {r.status === "done" && r.summary && (
                     <p
                       className="mt-1 line-clamp-2 text-sm"
                       style={{ color: "var(--hint)" }}
@@ -120,9 +145,14 @@ export default function Home() {
                       {r.summary}
                     </p>
                   )}
-                  <p className="mt-1 text-xs" style={{ color: "var(--hint)" }}>
-                    {langLabel(r.language)}
-                    {r.language ? " · " : ""}
+                  <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs" style={{ color: "var(--hint)" }}>
+                    <StatusBadge status={r.status} />
+                    {r.status !== "ready" && r.status !== "processing" && (
+                      <>
+                        {langLabel(r.language)}
+                        {r.language ? " · " : ""}
+                      </>
+                    )}
                     {new Date(r.createdAt).toLocaleDateString()}
                   </p>
                 </div>
@@ -133,7 +163,14 @@ export default function Home() {
       </div>
 
       {showUpload && (
-        <UploadModal onClose={() => setShowUpload(false)} onDone={onDone} />
+        <UploadModal onClose={() => setShowUpload(false)} onDone={onUploaded} />
+      )}
+      {selectedId && (
+        <TranscriptionSheet
+          id={selectedId}
+          onClose={() => setSelectedId(null)}
+          onChanged={load}
+        />
       )}
     </main>
   );

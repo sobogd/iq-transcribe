@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
+import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { prisma } from "@/lib/prisma";
+import { getS3Client, s3Bucket } from "@/lib/s3";
 import { resolveOwner, isAllowed } from "@/lib/auth";
 
 export const runtime = "nodejs";
+
+// Strip the public-URL prefix to recover the S3 object key.
+function s3KeyFromUrl(url: string): string | null {
+  const prefix = `${process.env.S3_HOST}/${process.env.S3_NAME}/`;
+  return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+}
 
 export async function GET(
   req: Request,
@@ -69,6 +77,20 @@ export async function DELETE(
     if (!row || row.ownerKey !== owner) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
+    // Best-effort: remove the stored audio object so it doesn't orphan in S3.
+    if (row.audioUrl) {
+      const key = s3KeyFromUrl(row.audioUrl);
+      if (key) {
+        try {
+          await getS3Client().send(
+            new DeleteObjectCommand({ Bucket: s3Bucket(), Key: key }),
+          );
+        } catch {
+          /* ignore — the DB row is what matters */
+        }
+      }
+    }
+
     await prisma.transcription.delete({ where: { id } });
     return NextResponse.json({ ok: true });
   } catch (err: unknown) {

@@ -13,12 +13,14 @@ model Transcription {
   ownerKey   String? // "telegram:<id>" | "device:<uuid>"
   title      String   @default("")
   fileName   String
-  fileUrl    String? // S3 url of the original uploaded file (best-effort)
+  audioUrl   String? // S3 url of the extracted audio (mp3) — kept for playback + retry
   mimeType   String   @default("")
   sizeBytes  Int? // original file size in bytes
   language   String   @default("") // detected spoken language, e.g. "ru" | "es" | "en"
   transcript String   @default("")
   summary    String   @default("")
+  status     String   @default("done") // "processing" | "done" | "error"
+  error      String? // failure reason when status = "error"
   createdAt  DateTime @default(now())
 
   @@index([ownerKey])
