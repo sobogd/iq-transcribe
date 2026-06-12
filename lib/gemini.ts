@@ -4,41 +4,30 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 const MODEL = "gemini-2.5-flash"; // accepts audio; cheap + fast
 
-const PROMPT = `You receive an audio file that contains speech.
-1. Detect the main spoken language and return its ISO-639-1 code (e.g. "ru", "es", "en", "it").
-2. Transcribe ALL speech accurately, with correct punctuation and paragraph breaks.
-   Do not add filler, timestamps or speaker labels unless clearly distinguishable.
-3. Write a concise SUMMARY of the content in the SAME language as the speech:
-   key points, decisions, names and numbers. A few short paragraphs or bullet points.
-4. Produce a short descriptive TITLE (max ~6 words) in the same language.
-If the audio has no intelligible speech, return empty strings for transcript and summary.`;
+const TRANSCRIBE_PROMPT = `Transcribe ALL speech in this audio accurately, with
+correct punctuation and natural paragraph breaks. Output ONLY the transcript
+text — no commentary, no timestamps, no speaker labels, no markdown. If there is
+no intelligible speech, output nothing.`;
 
-const responseSchema = {
+const SUMMARY_PROMPT = `You are given a transcript of an audio recording.
+1. Detect the main language and return its ISO-639-1 code (e.g. "ru", "es", "en").
+2. Produce a short descriptive TITLE (max ~6 words) in that language.
+3. Write a concise SUMMARY in that SAME language: key points, decisions, names
+   and numbers, as a few short paragraphs or bullet points.`;
+
+const summarySchema = {
   type: Type.OBJECT,
   properties: {
     language: { type: Type.STRING },
     title: { type: Type.STRING },
-    transcript: { type: Type.STRING },
     summary: { type: Type.STRING },
   },
-  required: ["language", "title", "transcript", "summary"],
+  required: ["language", "title", "summary"],
 };
 
-const genConfig = {
-  temperature: 0.2,
-  responseMimeType: "application/json",
-  responseSchema,
-};
-
-export type GeminiResult = {
-  language: string;
-  title: string;
-  transcript: string;
-  summary: string;
-};
+export type SummaryResult = { language: string; title: string; summary: string };
 
 // Upload to the Gemini Files API and poll until the file is ACTIVE (processed).
-// inlineData caps at ~20MB per request, so longer audio must go through Files API.
 async function uploadToGemini(buf: Buffer, mimeType: string, name: string) {
   const blob = new Blob([new Uint8Array(buf)], { type: mimeType });
   let file = await ai.files.upload({ file: blob, config: { mimeType, displayName: name } });
@@ -54,32 +43,29 @@ async function uploadToGemini(buf: Buffer, mimeType: string, name: string) {
   return file;
 }
 
-// Transcribe + summarize an MP3 audio buffer. Throws on hard failure; returns
-// empty transcript/summary when there is no intelligible speech.
-export async function transcribeAudio(audioBuf: Buffer): Promise<GeminiResult> {
+// Transcribe a single audio chunk to PLAIN TEXT. Streaming avoids undici's 300s
+// headers timeout; plain text (no JSON) means a long transcript can't truncate
+// into invalid JSON — chunks keep each response well under the output cap.
+export async function transcribeChunk(audioBuf: Buffer): Promise<string> {
   const audioMime = "audio/mpeg";
-  const gFile = await uploadToGemini(audioBuf, audioMime, `audio-${Date.now()}.mp3`);
+  const gFile = await uploadToGemini(audioBuf, audioMime, `chunk-${Date.now()}.mp3`);
   try {
-    // Stream the response: long transcripts can take several minutes to fully
-    // generate, which would trip undici's 300s headers timeout on a single
-    // non-streamed fetch. Streaming gets headers immediately and keeps the
-    // connection alive as tokens arrive.
     const stream = await ai.models.generateContentStream({
       model: MODEL,
       contents: [
         {
           role: "user",
           parts: [
-            { text: PROMPT },
+            { text: TRANSCRIBE_PROMPT },
             { fileData: { mimeType: audioMime, fileUri: gFile.uri as string } },
           ],
         },
       ],
-      config: genConfig,
+      config: { temperature: 0.2 },
     });
     let text = "";
     for await (const chunk of stream) text += chunk.text ?? "";
-    return JSON.parse(text || "{}");
+    return text.trim();
   } finally {
     try {
       await ai.files.delete({ name: gFile.name as string });
@@ -87,4 +73,38 @@ export async function transcribeAudio(audioBuf: Buffer): Promise<GeminiResult> {
       /* best-effort cleanup */
     }
   }
+}
+
+// Summarize the full (joined) transcript. Output is small, so JSON is safe here.
+export async function summarize(transcript: string): Promise<SummaryResult> {
+  const stream = await ai.models.generateContentStream({
+    model: MODEL,
+    contents: [{ role: "user", parts: [{ text: `${SUMMARY_PROMPT}\n\nTRANSCRIPT:\n${transcript}` }] }],
+    config: {
+      temperature: 0.2,
+      responseMimeType: "application/json",
+      responseSchema: summarySchema,
+    },
+  });
+  let text = "";
+  for await (const chunk of stream) text += chunk.text ?? "";
+  return JSON.parse(text || "{}");
+}
+
+// Run an async mapper over items with a bounded concurrency, preserving order.
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }

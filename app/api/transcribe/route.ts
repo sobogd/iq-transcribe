@@ -1,60 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { spawn } from "node:child_process";
-import { existsSync, createWriteStream } from "node:fs";
+import { createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { ReadableStream as NodeWebReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
-import ffmpegStatic from "ffmpeg-static";
 import { prisma } from "@/lib/prisma";
 import { getS3Client, s3Bucket, s3Key, getPublicUrl } from "@/lib/s3";
 import { resolveOwner, isAllowed } from "@/lib/auth";
+import { extractAudio } from "@/lib/ffmpeg";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-// Resolve the ffmpeg binary at runtime. ffmpeg-static bakes an absolute path via
-// __dirname which the bundler can rewrite to a build-time path, so fall back to
-// the binary inside the running app's node_modules (pm2 cwd).
-function resolveFfmpeg(): string {
-  const candidates = [
-    process.env.FFMPEG_PATH,
-    ffmpegStatic,
-    join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg"),
-  ].filter((p): p is string => Boolean(p));
-  for (const c of candidates) if (existsSync(c)) return c;
-  throw new Error("ffmpeg binary not found");
-}
-
-// Strip the video track and re-encode to mono 16 kHz MP3. Reads from a file on
-// disk (the upload was streamed there — never fully buffered in RAM) and returns
-// the small audio buffer. Gemini is billed on audio seconds regardless of
-// bitrate, so sending only the audio roughly halves the per-hour cost.
-async function extractAudio(inPath: string, outPath: string): Promise<void> {
-  const ffmpegPath = resolveFfmpeg();
-  await new Promise<void>((resolve, reject) => {
-    const ff = spawn(ffmpegPath, [
-      "-i", inPath,
-      "-vn", // drop video
-      "-ac", "1", // mono
-      "-ar", "16000", // 16 kHz is plenty for speech
-      "-b:a", "64k",
-      "-f", "mp3",
-      "-y", outPath,
-    ]);
-    let err = "";
-    ff.stderr.on("data", (d) => (err += d.toString()));
-    ff.on("error", reject);
-    ff.on("close", (code) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`ffmpeg exited ${code}: ${err.slice(-400)}`)),
-    );
-  });
-}
 
 export async function POST(req: NextRequest) {
   const owner = resolveOwner(req);
